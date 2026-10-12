@@ -40,34 +40,50 @@ jobs:
 
           echo "Extracted: ${zips[0]}"
           find "$GITHUB_WORKSPACE/build-src" -maxdepth 3 -type f | head -200
-
-      - name: Build with the PSPDEV Docker image
+      - name: Diagnose and build with PSPDEV Docker
         shell: bash
         run: |
           set -euo pipefail
-          docker pull pspdev/pspdev:latest
 
           docker run --rm \
             -v "$GITHUB_WORKSPACE/build-src:/source" \
             -w /source \
             pspdev/pspdev:latest \
             bash -lc '
-              set -euo pipefail
+              set -uo pipefail
 
-              echo "PSPSDK environment:"
-              psp-config --pspdev
+              echo "=== Environment ==="
+              echo "PSPDEV=${PSPDEV:-<unset>}"
+              echo "PATH=$PATH"
 
-              makefile="$(find /source -type f \( -name Makefile -o -name makefile \) -print -quit)"
-              if [ -z "$makefile" ]; then
-                echo "ERROR: No Makefile found in the extracted ZIP."
+              if [ -n "${PSPDEV:-}" ]; then
+                export PATH="$PSPDEV/bin:$PATH"
+              fi
+
+              echo "=== Tool discovery ==="
+              command -v psp-gcc || true
+              command -v psp-config || true
+              find /usr/local /opt -type f \
+                \( -name psp-gcc -o -name psp-config \) \
+                -print 2>/dev/null | head -50
+
+              if ! command -v psp-gcc >/dev/null 2>&1; then
+                echo "ERROR: psp-gcc was not found. Check the image/toolchain."
                 exit 1
               fi
 
-              project_dir="$(dirname "$makefile")"
-              echo "Building in: $project_dir"
-              cd "$project_dir"
+              makefile="$(find /source -type f \
+                \( -name Makefile -o -name makefile \) \
+                -print -quit)"
 
-              make -j"$(nproc)"
+              if [ -z "$makefile" ]; then
+                echo "ERROR: No Makefile found in extracted ZIP."
+                exit 1
+              fi
+
+              cd "$(dirname "$makefile")"
+              echo "=== Building in $PWD ==="
+              make -j2
             '
 
       - name: Upload EBOOT.PBP
