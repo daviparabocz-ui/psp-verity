@@ -1,0 +1,80 @@
+name: Build PSP EBOOT
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "*.zip"
+      - ".github/workflows/build-psp.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Find and extract ZIP from repository root
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          zips=( "$GITHUB_WORKSPACE"/*.zip )
+
+          if (( ${#zips[@]} == 0 )); then
+            echo "::error::No .zip file found in the repository root."
+            exit 1
+          fi
+
+          if (( ${#zips[@]} > 1 )); then
+            echo "::error::More than one .zip file found in the repository root. Keep only the intended source ZIP there."
+            printf 'Found: %s\n' "${zips[@]}"
+            exit 1
+          fi
+
+          mkdir -p "$GITHUB_WORKSPACE/build-src"
+          unzip -q "${zips[0]}" -d "$GITHUB_WORKSPACE/build-src"
+
+          echo "Extracted: ${zips[0]}"
+          find "$GITHUB_WORKSPACE/build-src" -maxdepth 3 -type f | head -200
+
+      - name: Build with the PSPDEV Docker image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull pspdev/pspdev:latest
+
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/build-src:/source" \
+            -w /source \
+            pspdev/pspdev:latest \
+            bash -lc '
+              set -euo pipefail
+
+              echo "PSPSDK environment:"
+              psp-config --pspdev
+
+              makefile="$(find /source -type f \( -name Makefile -o -name makefile \) -print -quit)"
+              if [ -z "$makefile" ]; then
+                echo "ERROR: No Makefile found in the extracted ZIP."
+                exit 1
+              fi
+
+              project_dir="$(dirname "$makefile")"
+              echo "Building in: $project_dir"
+              cd "$project_dir"
+
+              make -j"$(nproc)"
+            '
+
+      - name: Upload EBOOT.PBP
+        uses: actions/upload-artifact@v4
+        with:
+          name: PSP-EBOOT
+          path: build-src/**/EBOOT.PBP
+          if-no-files-found: error
+          retention-days: 14
+          
